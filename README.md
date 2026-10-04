@@ -4,6 +4,6 @@
 #### Building the project
 
 ```console
-$ odin build src -out:stowon
-$ ./stowon
+$ odin build src -out:stoyon
+$ ./stoyon
 ```
