@@ -1,0 +1,8 @@
+# this is a comment
+# This config only supports comments like this
+# no multiline comments or in-line comments
+
+fps = 60.0
+width = 1280
+height = 720
+debug = false
