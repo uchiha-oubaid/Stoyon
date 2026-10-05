@@ -16,15 +16,7 @@ Types :: union {
 	bool
 }
 
-get_next_icon_bounds :: proc(xx, yy, s: f32) -> rl.Rectangle {
-	return rl.Rectangle {
-		x = xx,
-		y = yy,
-		width = s,
-		height = s
-	}
-}
-
+// TODO: Make the tooltip more polished
 show_tooltip :: proc(font: rl.Font, message: cstring, pos: rl.Vector2) {
     text_margin: f32 = 30
     margined_pos: rl.Vector2 = pos + text_margin
@@ -37,8 +29,10 @@ show_tooltip :: proc(font: rl.Font, message: cstring, pos: rl.Vector2) {
         height = message_size.y + text_margin*2,
     }
 
-    rl.DrawRectangleRec(tooltip_rec, rl.BLACK)
-    rl.DrawRectangleLinesEx(tooltip_rec, 3, rl.PURPLE) // outline for the tooltip box
+    roundness: f32 = 0.2
+    segments: i32 = 1
+    rl.DrawRectangleRounded(tooltip_rec, roundness, segments, rl.BLACK)
+    rl.DrawRectangleRoundedLinesEx(tooltip_rec, roundness, segments, 3, rl.PURPLE) // outline for the tooltip box
     rl.DrawTextEx(font, message, margined_pos, 20, 2, rl.GetColor(TEXT_COLOR))
 }
 
@@ -52,8 +46,8 @@ main :: proc() {
 
 	file_map := parse_config_file(file_data)
 	s_width, s_height := i32(file_map["width"].(f32)), i32(file_map["height"].(f32))
+    rl.SetConfigFlags({.WINDOW_RESIZABLE, .WINDOW_ALWAYS_RUN, .VSYNC_HINT})
     rl.InitWindow(s_width, s_height, "Stowon")
-    rl.SetWindowState({.WINDOW_RESIZABLE, .MSAA_4X_HINT, .WINDOW_HIGHDPI})
     defer rl.CloseWindow()
 	rl.InitAudioDevice()
 
@@ -64,16 +58,19 @@ main :: proc() {
 	fps := i32(file_map["fps"].(f32))
 	rl.SetTargetFPS(fps)
 
-	//seed := time.time_to_unix(time.now())
-	//rand.reset(u64(seed))
+    // generate random stuff
+	seed := time.time_to_unix(time.now())
+	r := rand.create(u64(seed))
+    context.random_generator = rand.default_random_generator(&r)
 
-    font_path: cstring = "./fonts/JetBrainsMonoNLNerdFont-Regular.ttf"
+    font_path: cstring = "./res/fonts/JetBrainsMonoNerdFont-Regular.ttf"
 	font := rl.LoadFontEx(font_path, DEFAULT_FONT_SIZE, nil, 0)
 	defer rl.UnloadFont(font)
 	assert(rl.IsFontValid(font), "Error: Font is not valid\n")
 	rl.SetTextureFilter(font.texture, .BILINEAR)
 
-	music_image := rl.LoadTexture("./res/music_icon_1.png")
+    num := rand.uint32_range(0, 2)
+	music_image := rl.LoadTexture(fmt.ctprintf("./res/covers/music_icon_%v.png", num))
 	defer rl.UnloadTexture(music_image)
 
 	music_image_src: rl.Rectangle = {
@@ -87,15 +84,59 @@ main :: proc() {
 	time_text_spacing: f32 = 5
 	battery_percentage: f32 = 0.5 // Between 0..1
 
-	test_music := rl.LoadMusicStream("./res/echoes_of_lumen-pixel-art-game.mp3")
-	defer rl.UnloadMusicStream(test_music)
+    default_music_folder: cstring = "/home/oubaid/Music/chiptunes"
+    music_list := rl.LoadDirectoryFiles(default_music_folder)
+    current_music_index := rand.uint32_range(0, music_list.count)
+
+    curren_music_path := music_list.paths[current_music_index]
+	current_music := rl.LoadMusicStream(curren_music_path)//"./res/music/echoes_of_lumen-pixel-art-game.mp3")
+	defer rl.UnloadMusicStream(current_music)
 	
     zoom_in_out: f32 = 0.25
+    volume: f32 = 0.25
 
     for !rl.WindowShouldClose() {
-		rl.UpdateMusicStream(test_music)
-		rl.SetMusicVolume(test_music, 0.1)
-		if rl.IsKeyPressed(.SPACE) && !rl.IsMusicStreamPlaying(test_music) do rl.PlayMusicStream(test_music)
+        free_all(context.temp_allocator)
+        
+		rl.UpdateMusicStream(current_music)
+		rl.SetMusicVolume(current_music, volume)
+		music_time_percentage: f32 = rl.GetMusicTimePlayed(current_music) / rl.GetMusicTimeLength(current_music)
+
+		if rl.IsKeyPressed(.SPACE)  {
+            if !rl.IsMusicStreamPlaying(current_music) do rl.PlayMusicStream(current_music)
+        }
+
+        // change between the tracks
+        if rl.IsKeyPressed(.LEFT) {
+            if current_music_index == 0 {
+                current_music_index = u32(music_list.count) - 1
+            } else {
+                current_music_index -= 1
+            }
+
+            // reload the music
+            rl.UnloadMusicStream(current_music)
+            curren_music_path = music_list.paths[current_music_index]
+            current_music = rl.LoadMusicStream(curren_music_path)
+
+            if rl.IsMusicValid(current_music) do rl.PlayMusicStream(current_music) // play the music after reloading
+        }
+
+        if rl.IsKeyPressed(.RIGHT) {
+            fmt.println("Music Ended")
+            if current_music_index == u32(music_list.count) - 1 {
+                current_music_index = 0
+            } else {
+                current_music_index += 1
+            }
+
+            // reload the music
+            rl.UnloadMusicStream(current_music)
+            curren_music_path = music_list.paths[current_music_index]
+            current_music = rl.LoadMusicStream(curren_music_path)
+
+            if rl.IsMusicValid(current_music) do rl.PlayMusicStream(current_music) // play the music after reloading
+        }
 
 		width := f32(rl.GetScreenWidth())
 		height := f32(rl.GetScreenHeight())
@@ -115,11 +156,15 @@ main :: proc() {
         hours, mins, _ := time.clock_from_time(time.now())
 		time_text := fmt.ctprintf("%02v:%02v", hours + 1, mins)
 		time_dimensions := rl.MeasureTextEx(font, time_text, time_text_size, time_text_spacing)
+        year, month, day := time.date(time.now())
+
+        date := fmt.ctprintf("%02v/%02d/%v", day, month, year)
+		date_dimensions := rl.MeasureTextEx(font, date, time_text_size, time_text_spacing)
 		
 		music_image_size := width*0.25
 		music_image_dest: rl.Rectangle = {
-			x = 100,
-			y = 100,
+			x = width*0.1,
+			y = height*0.1,
 			width  = music_image_size,
 			height = music_image_size
 		}
@@ -135,17 +180,19 @@ main :: proc() {
 
         rl.DrawTexturePro(music_image, music_image_src, music_image_dest, {0, 0}, 0, rl.WHITE)
         rl.DrawTextEx(font, time_text, time_pos, time_text_size, time_text_spacing, rl.WHITE)
+        rl.DrawTextEx(font, date, {time_pos.x - date_dimensions.x - margin,
+                                   time_pos.y}, time_text_size, time_text_spacing, rl.WHITE)
 
-		music_title := fmt.ctprintf("|%v|", rl.GetFileNameWithoutExt("./res/echoes_of_lumen-pixel-art-game.mp3"))
-        title_size := rl.MeasureTextEx(font, music_title, music_image_dest.width*0.05, time_text_spacing)
+        music_title_font_size := music_image_dest.width*0.06
+		music_title := fmt.ctprintf("*%v*", rl.GetFileNameWithoutExt(curren_music_path))
+        title_size := rl.MeasureTextEx(font, music_title, music_title_font_size, time_text_spacing)
 
 		rl.DrawTextEx(font, music_title,
 					  {music_image_dest.x + (music_image_dest.width - title_size.x)*0.5,
 					   music_image_dest.y + music_image_dest.height + margin*2},
-					   music_image_dest.width*0.05, time_text_spacing, rl.GetColor(TEXT_COLOR))
+					   music_title_font_size, time_text_spacing, rl.GetColor(TEXT_COLOR))
 
 		music_time_line_thickness: f32 = 5
-		music_time_percentage: f32 = rl.GetMusicTimePlayed(test_music) / rl.GetMusicTimeLength(test_music)
 		music_time_line_bounds: rl.Rectangle = {
 			x = music_image_dest.x,
 			y = music_image_dest.y + music_image_dest.height + margin*0.5,
@@ -162,7 +209,6 @@ main :: proc() {
 
         rl.EndMode2D()
 		rl.EndDrawing()
-        free_all(context.temp_allocator)
     }
 }
 

@@ -5,4 +5,6 @@
 fps = 60.0
 width = 1280
 height = 720
+
+# debug mode still not supported yet
 debug = false
