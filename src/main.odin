@@ -1,14 +1,15 @@
 package stoyon
 import "core:fmt"
-import rl "vendor:raylib"
 import "core:os"
 import "core:time"
 import "core:math"
 import "core:math/rand"
+import rl "vendor:raylib"
 
-BACKGROUND_COLOR	:: 0x181818FF
-TEXT_COLOR			:: 0xE4E4E4FF
-DEFAULT_FONT_SIZE   :: 50
+BACKGROUND_COLOR	     :: 0x181818FF
+TOOLTIP_BACKGROUND_COLOR :: 0x242424FF
+TEXT_COLOR			     :: 0xE4E4E4FF
+DEFAULT_FONT_SIZE        :: 50
 
 Types :: union {
 	f32,
@@ -16,7 +17,6 @@ Types :: union {
 	bool
 }
 
-// TODO: Make the tooltip more polished
 show_tooltip :: proc(font: rl.Font, message: cstring, pos: rl.Vector2) {
     text_margin: f32 = 30
     margined_pos: rl.Vector2 = pos + text_margin
@@ -31,12 +31,19 @@ show_tooltip :: proc(font: rl.Font, message: cstring, pos: rl.Vector2) {
 
     roundness: f32 = 0.2
     segments: i32 = 1
-    rl.DrawRectangleRounded(tooltip_rec, roundness, segments, rl.BLACK)
-    rl.DrawRectangleRoundedLinesEx(tooltip_rec, roundness, segments, 3, rl.PURPLE) // outline for the tooltip box
+    rl.DrawRectangleRounded(tooltip_rec, roundness, segments, rl.GetColor(TOOLTIP_BACKGROUND_COLOR))
+    rl.DrawRectangleRoundedLinesEx(tooltip_rec, roundness, segments, 3, rl.WHITE) // outline for the tooltip box
     rl.DrawTextEx(font, message, margined_pos, 20, 2, rl.GetColor(TEXT_COLOR))
 }
 
 main :: proc() {
+    // TODO: make the "music-dir" & "music-covers-dir" customizable
+
+    //if len(os.args) < 3 {
+    //    fmt.printf("Usage: ./stoyon <music-dir> <music-covers-dir>\n")
+    //    os.exit(1)
+    //}
+
 	input_file := "config.mini"
 	file_data, open_err := os.read_entire_file(input_file, context.temp_allocator)
 	if open_err != nil {
@@ -69,8 +76,10 @@ main :: proc() {
 	assert(rl.IsFontValid(font), "Error: Font is not valid\n")
 	rl.SetTextureFilter(font.texture, .BILINEAR)
 
-    num := rand.uint32_range(0, 2)
-	music_image := rl.LoadTexture(fmt.ctprintf("./res/covers/music_icon_%v.png", num))
+    music_covers := rl.LoadDirectoryFilesEx("./res/covers/", "png", true)
+    current_music_cover_index := rand.uint32_range(0, u32(music_covers.count) + 1)
+
+	music_image := rl.LoadTexture(music_covers.paths[current_music_cover_index])
 	defer rl.UnloadTexture(music_image)
 
 	music_image_src: rl.Rectangle = {
@@ -80,30 +89,52 @@ main :: proc() {
 		height	= f32(music_image.height)
 	}
 	
-	time_text_size: f32 = 18
 	time_text_spacing: f32 = 5
-	battery_percentage: f32 = 0.5 // Between 0..1
 
-    default_music_folder: cstring = "/home/oubaid/Music/chiptunes"
+    default_music_folder: cstring = "/home/oubaid/Music/chiptunes/"
     music_list := rl.LoadDirectoryFiles(default_music_folder)
     current_music_index := rand.uint32_range(0, music_list.count)
 
     curren_music_path := music_list.paths[current_music_index]
-	current_music := rl.LoadMusicStream(curren_music_path)//"./res/music/echoes_of_lumen-pixel-art-game.mp3")
+	current_music := rl.LoadMusicStream(curren_music_path) //"./res/music/echoes_of_lumen-pixel-art-game.mp3")
 	defer rl.UnloadMusicStream(current_music)
-	
+
     zoom_in_out: f32 = 0.25
-    volume: f32 = 0.25
+    volume: f32 = 0.5
+    max_volume, min_volume: f32 = 1, 0
 
     for !rl.WindowShouldClose() {
         free_all(context.temp_allocator)
-        
-		rl.UpdateMusicStream(current_music)
-		rl.SetMusicVolume(current_music, volume)
-		music_time_percentage: f32 = rl.GetMusicTimePlayed(current_music) / rl.GetMusicTimeLength(current_music)
+
+		width := f32(rl.GetScreenWidth())
+		height := f32(rl.GetScreenHeight())
+        mouse := rl.GetMousePosition()
+		dt := rl.GetFrameTime()
+		margin: f32 = 20
+        time_text_size: f32 = height*0.025
+        //music_stopped := !rl.IsMusicStreamPlaying(current_music_path)
+
+        rl.UpdateMusicStream(current_music)
+        rl.SetMusicVolume(current_music, volume)
+        music_time_percentage: f32 = rl.GetMusicTimePlayed(current_music) / rl.GetMusicTimeLength(current_music)
 
 		if rl.IsKeyPressed(.SPACE)  {
-            if !rl.IsMusicStreamPlaying(current_music) do rl.PlayMusicStream(current_music)
+            if !rl.IsMusicStreamPlaying(current_music) {
+                if music_time_percentage == 0 do rl.PlayMusicStream(current_music)
+                rl.ResumeMusicStream(current_music)
+            } else {
+                rl.PauseMusicStream(current_music)
+            }
+        }
+
+        if rl.IsKeyPressed(.UP) {
+            volume += 0.25
+            if volume > max_volume do volume = max_volume
+        }
+
+        if rl.IsKeyPressed(.DOWN) {
+            volume -= 0.25
+            if volume < min_volume do volume = min_volume
         }
 
         // change between the tracks
@@ -119,11 +150,27 @@ main :: proc() {
             curren_music_path = music_list.paths[current_music_index]
             current_music = rl.LoadMusicStream(curren_music_path)
 
+            // reload the music cover
+            if current_music_cover_index == 0 {
+                current_music_cover_index = u32(music_covers.count) - 1
+            }
+            else {
+                current_music_cover_index -= 1
+            }
+
+            rl.UnloadTexture(music_image)
+            music_image = rl.LoadTexture(music_covers.paths[current_music_cover_index])
+            music_image_src = {
+                x		= 0,
+                y		= 0,
+                width	= f32(music_image.width),
+                height	= f32(music_image.height)
+            }
+
             if rl.IsMusicValid(current_music) do rl.PlayMusicStream(current_music) // play the music after reloading
         }
 
         if rl.IsKeyPressed(.RIGHT) {
-            fmt.println("Music Ended")
             if current_music_index == u32(music_list.count) - 1 {
                 current_music_index = 0
             } else {
@@ -135,14 +182,26 @@ main :: proc() {
             curren_music_path = music_list.paths[current_music_index]
             current_music = rl.LoadMusicStream(curren_music_path)
 
+            // reload the music cover
+            if current_music_cover_index == u32(music_covers.count) - 1 {
+                current_music_cover_index = 0
+            }
+            else {
+                current_music_cover_index += 1
+            }
+
+            rl.UnloadTexture(music_image)
+            music_image = rl.LoadTexture(music_covers.paths[current_music_cover_index])
+            music_image_src = {
+                x		= 0,
+                y		= 0,
+                width	= f32(music_image.width),
+                height	= f32(music_image.height)
+            }
+
             if rl.IsMusicValid(current_music) do rl.PlayMusicStream(current_music) // play the music after reloading
         }
 
-		width := f32(rl.GetScreenWidth())
-		height := f32(rl.GetScreenHeight())
-        mouse := rl.GetMousePosition()
-		dt := rl.GetFrameTime()
-		margin: f32 = 20
 
         camera.offset = {width/2, height/2}
         camera.target = {width/2, height/2}
@@ -154,7 +213,7 @@ main :: proc() {
         }
 
         hours, mins, _ := time.clock_from_time(time.now())
-		time_text := fmt.ctprintf("%02v:%02v", hours + 1, mins)
+		time_text := fmt.ctprintf("%02d:%02d", hours + 1, mins)
 		time_dimensions := rl.MeasureTextEx(font, time_text, time_text_size, time_text_spacing)
         year, month, day := time.date(time.now())
 
@@ -183,8 +242,8 @@ main :: proc() {
         rl.DrawTextEx(font, date, {time_pos.x - date_dimensions.x - margin,
                                    time_pos.y}, time_text_size, time_text_spacing, rl.WHITE)
 
-        music_title_font_size := music_image_dest.width*0.06
-		music_title := fmt.ctprintf("*%v*", rl.GetFileNameWithoutExt(curren_music_path))
+        music_title_font_size := music_image_dest.height*0.07
+		music_title := fmt.ctprintf("* %v *", rl.GetFileNameWithoutExt(curren_music_path))
         title_size := rl.MeasureTextEx(font, music_title, music_title_font_size, time_text_spacing)
 
 		rl.DrawTextEx(font, music_title,
@@ -196,7 +255,7 @@ main :: proc() {
 		music_time_line_bounds: rl.Rectangle = {
 			x = music_image_dest.x,
 			y = music_image_dest.y + music_image_dest.height + margin*0.5,
-			width = math.clamp(0, margin*0.5 + music_time_percentage*music_image_dest.width, music_image_dest.width),
+			width = math.clamp(f32(0), margin*0.5 + music_time_percentage*music_image_dest.width, music_image_dest.width),
 			height = music_time_line_thickness
 		}
 		
@@ -204,7 +263,11 @@ main :: proc() {
 
         // tooltips must be last thing to render
         if rl.CheckCollisionPointRec(mouse, music_image_dest) {
-            show_tooltip(font, "<left>&<right> to move between tracks", mouse)
+            show_tooltip(
+                font, 
+                "* <left>&<right> to move between tracks.\n* <space> to pause/unpause the current track.\n* <up>&<down> to increase/decrease tracks sound.",
+                mouse
+            )
         }
 
         rl.EndMode2D()
