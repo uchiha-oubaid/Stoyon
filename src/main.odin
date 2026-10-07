@@ -2,6 +2,7 @@ package stoyon
 import "core:fmt"
 import "core:os"
 import "core:time"
+import "core:strings"
 import "core:math"
 import "core:math/rand"
 import rl "vendor:raylib"
@@ -9,7 +10,12 @@ import rl "vendor:raylib"
 BACKGROUND_COLOR	     :: 0x181818FF
 TOOLTIP_BACKGROUND_COLOR :: 0x242424FF
 TEXT_COLOR			     :: 0xE4E4E4FF
-DEFAULT_FONT_SIZE        :: 50
+PAUSED_TEXT_COLOR        :: 0xA0A0A0FF
+FONT_PATH                :: "./res/fonts/JetBrainsMonoNLNerdFont-Bold.ttf"
+FONT_BASE_SIZE           :: 128
+TIMER_ATLAS_WIDTH        :: 1890
+TIMER_ATLAS_HEIGHT       :: 340
+TIMER_CELL_WIDTH         :: TIMER_ATLAS_WIDTH/11
 
 Types :: union {
 	f32,
@@ -60,7 +66,9 @@ main :: proc() {
 
     camera: rl.Camera2D
 	camera.rotation = 0
-	camera.zoom = 1 // Default value
+	camera.zoom = 1
+    camera.offset = {0, 0}
+    camera.target = {0, 0}
 
 	fps := i32(file_map["fps"].(f32))
 	rl.SetTargetFPS(fps)
@@ -70,11 +78,30 @@ main :: proc() {
 	r := rand.create(u64(seed))
     context.random_generator = rand.default_random_generator(&r)
 
-    font_path: cstring = "./res/fonts/JetBrainsMonoNerdFont-Regular.ttf"
-	font := rl.LoadFontEx(font_path, DEFAULT_FONT_SIZE, nil, 0)
-	defer rl.UnloadFont(font)
-	assert(rl.IsFontValid(font), "Error: Font is not valid\n")
-	rl.SetTextureFilter(font.texture, .BILINEAR)
+    // Load smooth font
+    fileSize: i32 = 0
+    fileData := rl.LoadFileData(FONT_PATH, &fileSize)
+    if fileData == nil {
+        fmt.eprintf("Error: Font not valid\n")
+        os.exit(1)
+    }
+
+    font: rl.Font = {}
+    font.baseSize = FONT_BASE_SIZE
+    font.glyphCount = 95
+    font.glyphPadding = 0
+    font.glyphs = rl.LoadFontData(fileData, fileSize, FONT_BASE_SIZE, nil, 0, .SDF, &font.glyphCount)
+    rl.UnloadFileData(fileData)
+
+    if font.glyphs == nil {
+        fmt.eprintf("Error: glyphs == nil\n")
+        os.exit(1)
+    }
+
+    atlas := rl.GenImageFontAtlas(font.glyphs, &font.recs, font.glyphCount, font.baseSize, 0, 0)
+    font.texture = rl.LoadTextureFromImage(atlas)
+    rl.UnloadImage(atlas)
+    rl.SetTextureFilter(font.texture, .BILINEAR)
 
     music_covers := rl.LoadDirectoryFilesEx("./res/covers/", "png", true)
     current_music_cover_index := rand.uint32_range(0, u32(music_covers.count) + 1)
@@ -103,6 +130,11 @@ main :: proc() {
     volume: f32 = 0.5
     max_volume, min_volume: f32 = 1, 0
 
+    timer_atlas := rl.LoadTexture("./res/timer_atlas.png")
+    defer rl.UnloadTexture(timer_atlas)
+    rl.SetTextureFilter(timer_atlas, .BILINEAR)
+
+    text_color := rl.GetColor(PAUSED_TEXT_COLOR)
     for !rl.WindowShouldClose() {
         free_all(context.temp_allocator)
 
@@ -111,12 +143,19 @@ main :: proc() {
         mouse := rl.GetMousePosition()
 		dt := rl.GetFrameTime()
 		margin: f32 = 20
-        time_text_size: f32 = height*0.025
-        //music_stopped := !rl.IsMusicStreamPlaying(current_music_path)
+        time_text_size: f32 = height*0.03
+
+        if rl.IsMusicStreamPlaying(current_music) {
+            text_color = rl.GetColor(TEXT_COLOR)
+        } else {
+            text_color = rl.GetColor(PAUSED_TEXT_COLOR)
+        }
 
         rl.UpdateMusicStream(current_music)
         rl.SetMusicVolume(current_music, volume)
         music_time_percentage: f32 = rl.GetMusicTimePlayed(current_music) / rl.GetMusicTimeLength(current_music)
+
+        if rl.IsKeyPressed(.R) do rl.StopMusicStream(current_music)
 
 		if rl.IsKeyPressed(.SPACE)  {
             if !rl.IsMusicStreamPlaying(current_music) {
@@ -166,8 +205,8 @@ main :: proc() {
                 width	= f32(music_image.width),
                 height	= f32(music_image.height)
             }
-
-            if rl.IsMusicValid(current_music) do rl.PlayMusicStream(current_music) // play the music after reloading
+            
+            if rl.IsMusicValid(current_music) && music_time_percentage > 0 do rl.PlayMusicStream(current_music)
         }
 
         if rl.IsKeyPressed(.RIGHT) {
@@ -199,12 +238,9 @@ main :: proc() {
                 height	= f32(music_image.height)
             }
 
-            if rl.IsMusicValid(current_music) do rl.PlayMusicStream(current_music) // play the music after reloading
+            if rl.IsMusicValid(current_music) && music_time_percentage > 0 do rl.PlayMusicStream(current_music)
         }
 
-
-        camera.offset = {width/2, height/2}
-        camera.target = {width/2, height/2}
 
         if rl.IsKeyDown(.LEFT_CONTROL) && rl.IsKeyPressed(.EQUAL) {
             camera.zoom += zoom_in_out
@@ -227,31 +263,39 @@ main :: proc() {
 			width  = music_image_size,
 			height = music_image_size
 		}
-		
+
+        timer_margin: f32 = width*0.1
+        timer_scale: f32 = width*0.00037
+        timer_dest: rl.Rectangle = {
+            x = music_image_dest.x + music_image_dest.width + timer_margin,
+            y = music_image_dest.y + (music_image_dest.height - TIMER_ATLAS_HEIGHT*timer_scale)/2,
+            width = TIMER_CELL_WIDTH*timer_scale,
+            height = TIMER_ATLAS_HEIGHT*timer_scale
+        }
+
         rl.BeginDrawing()
         rl.BeginMode2D(camera)
         rl.ClearBackground(rl.GetColor(BACKGROUND_COLOR))
-		
 		time_pos: rl.Vector2 = {
 			width - time_dimensions.x - margin,
 			margin
 		}
 
         rl.DrawTexturePro(music_image, music_image_src, music_image_dest, {0, 0}, 0, rl.WHITE)
-        rl.DrawTextEx(font, time_text, time_pos, time_text_size, time_text_spacing, rl.WHITE)
+        rl.DrawTextEx(font, time_text, time_pos, time_text_size, time_text_spacing, text_color)
         rl.DrawTextEx(font, date, {time_pos.x - date_dimensions.x - margin,
-                                   time_pos.y}, time_text_size, time_text_spacing, rl.WHITE)
+                                   time_pos.y}, time_text_size, time_text_spacing, text_color)
 
-        music_title_font_size := music_image_dest.height*0.07
+        music_title_font_size := music_image_dest.width*0.08
 		music_title := fmt.ctprintf("* %v *", rl.GetFileNameWithoutExt(curren_music_path))
         title_size := rl.MeasureTextEx(font, music_title, music_title_font_size, time_text_spacing)
 
 		rl.DrawTextEx(font, music_title,
 					  {music_image_dest.x + (music_image_dest.width - title_size.x)*0.5,
 					   music_image_dest.y + music_image_dest.height + margin*2},
-					   music_title_font_size, time_text_spacing, rl.GetColor(TEXT_COLOR))
+					   music_title_font_size, time_text_spacing, text_color)
 
-		music_time_line_thickness: f32 = 5
+		music_time_line_thickness: f32 = title_size.y*0.125
 		music_time_line_bounds: rl.Rectangle = {
 			x = music_image_dest.x,
 			y = music_image_dest.y + music_image_dest.height + margin*0.5,
@@ -260,6 +304,9 @@ main :: proc() {
 		}
 		
 		rl.DrawRectangleRec(music_time_line_bounds, rl.WHITE)
+
+        // Timer
+        render_timer("00:00:00", timer_atlas, timer_dest, text_color)
 
         // tooltips must be last thing to render
         if rl.CheckCollisionPointRec(mouse, music_image_dest) {
@@ -275,3 +322,47 @@ main :: proc() {
     }
 }
 
+Num :: enum i32 {
+    ZERO = 0,
+    ONE,
+    TWO,
+    THREE,
+    FOUR,
+    FIVE,
+    SIX,
+    SEVEN,
+    EIGHT,
+    NINE,
+    TWO_POINTS
+}
+
+render_timer :: proc(time_text: string, timer_atlas: rl.Texture2D, timer_dest: rl.Rectangle, color: rl.Color) {
+    for char, i in time_text {
+        dest: rl.Rectangle = {
+            x = timer_dest.x + f32(i)*timer_dest.width,
+            y = timer_dest.y,
+            width = timer_dest.width,
+            height = timer_dest.height
+        }
+
+        index: i32
+        if u32(char) == u32(':') {
+            index = 10
+        } else {
+            index = i32(char) - i32('0')
+        }
+
+        render_number(timer_atlas, Num(index), dest, color)
+    }
+}
+
+render_number :: proc(texture: rl.Texture2D, num: Num, dest: rl.Rectangle, color: rl.Color) {
+    src_result: rl.Rectangle = {
+        x = f32(num)*TIMER_CELL_WIDTH,
+        y = 0,
+        width = TIMER_CELL_WIDTH,
+        height = TIMER_ATLAS_HEIGHT
+    }
+
+    rl.DrawTexturePro(texture, src_result, dest, {0, 0}, 0, color)
+}
