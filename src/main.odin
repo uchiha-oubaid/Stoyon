@@ -44,6 +44,7 @@ show_tooltip :: proc(font: rl.Font, message: cstring, pos: rl.Vector2) {
 
 main :: proc() {
     // TODO: make the "music-dir" & "music-covers-dir" customizable
+    // TODO: add a mechanism of downloading covers and music with a link (Linux only for now)
 
     //if len(os.args) < 3 {
     //    fmt.printf("Usage: ./stoyon <music-dir> <music-covers-dir>\n")
