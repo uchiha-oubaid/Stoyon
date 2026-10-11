@@ -42,14 +42,55 @@ show_tooltip :: proc(font: rl.Font, message: cstring, pos: rl.Vector2) {
     rl.DrawTextEx(font, message, margined_pos, 20, 2, rl.GetColor(TEXT_COLOR))
 }
 
+run_process :: proc(commands: ..string) -> bool {
+    state, stdout, stderr, err := os.process_exec({command = commands}, context.allocator)
+    defer delete(stderr)
+    defer delete(stdout)
+
+    fmt.println(state, string(stdout), string(stderr))
+    if err != nil do return false
+    return true
+}
+
+search_args :: proc(args: []string, arg: string) -> int {
+    i := 0
+    for i < len(args) - 1 && args[i] != arg do i += 1
+    if i < len(args) - 1 do return i
+    return len(args) - 1
+}
+
 main :: proc() {
     // TODO: make the "music-dir" & "music-covers-dir" customizable
-    // TODO: add a mechanism of downloading covers and music with a link (Linux only for now)
+    // TODO: (2) add a mechanism of downloading covers and music with a link (Linux only for now)
+    music_cover_dir: cstring = "./res/covers/"
+    music_covers := rl.LoadDirectoryFilesEx(music_cover_dir, "png", true)
+    last_music_cover_index := u32(music_covers.count)
+    current_music_cover_index := rand.uint32_range(0, u32(music_covers.count) + 1)
 
-    //if len(os.args) < 3 {
-    //    fmt.printf("Usage: ./stoyon <music-dir> <music-covers-dir>\n")
-    //    os.exit(1)
-    //}
+    // (2) -> almost
+    if len(os.args) > 1 {
+        cover_index := search_args(os.args, "-cover")
+        music_index := search_args(os.args, "-music")
+        if cover_index < len(os.args) - 1 {
+            output_path := fmt.tprintf("%v%v%v", music_cover_dir, last_music_cover_index+1,
+                             rl.GetFileExtension(strings.clone_to_cstring(os.args[cover_index+1])))
+            run_process("aria2c", os.args[cover_index+1], "-o", output_path)
+
+            // convert it to png and delete the jpg because raylib does support jpgs
+            // or any other image file type
+            // just use png
+            // it filters them only
+            // line 66
+            png_output_path := fmt.tprintf("%v%v.png", music_cover_dir, rl.GetFileNameWithoutExt(strings.clone_to_cstring(output_path)))
+            run_process("magick", output_path, png_output_path)
+            run_process("rm", "-rf", output_path)
+        } else if music_index < len(os.args) - 1 {
+            run_process("aria2c", os.args[music_index+1])
+        } else {
+            fmt.println("Error: invalid arguments")
+        }
+        return
+    }
 
 	input_file := "config.mini"
 	file_data, open_err := os.read_entire_file(input_file, context.temp_allocator)
@@ -60,7 +101,7 @@ main :: proc() {
 
 	file_map := parse_config_file(file_data)
 	s_width, s_height := i32(file_map["width"].(f32)), i32(file_map["height"].(f32))
-    rl.SetConfigFlags({.WINDOW_RESIZABLE, .WINDOW_ALWAYS_RUN, .VSYNC_HINT})
+    rl.SetConfigFlags({.MSAA_4X_HINT, .WINDOW_RESIZABLE, .WINDOW_ALWAYS_RUN, .VSYNC_HINT})
     rl.InitWindow(s_width, s_height, "Stowon")
     defer rl.CloseWindow()
 	rl.InitAudioDevice()
@@ -104,8 +145,6 @@ main :: proc() {
     rl.UnloadImage(atlas)
     rl.SetTextureFilter(font.texture, .BILINEAR)
 
-    music_covers := rl.LoadDirectoryFilesEx("./res/covers/", "png", true)
-    current_music_cover_index := rand.uint32_range(0, u32(music_covers.count) + 1)
 
 	music_image := rl.LoadTexture(music_covers.paths[current_music_cover_index])
 	defer rl.UnloadTexture(music_image)
@@ -134,17 +173,30 @@ main :: proc() {
     timer_atlas := rl.LoadTexture("./res/timer_atlas.png")
     defer rl.UnloadTexture(timer_atlas)
     rl.SetTextureFilter(timer_atlas, .BILINEAR)
-
     text_color := rl.GetColor(PAUSED_TEXT_COLOR)
+
+    // TEST
+    stopwatch: time.Stopwatch
+
     for !rl.WindowShouldClose() {
         free_all(context.temp_allocator)
 
-		width := f32(rl.GetScreenWidth())
+        width := f32(rl.GetScreenWidth())
 		height := f32(rl.GetScreenHeight())
         mouse := rl.GetMousePosition()
 		dt := rl.GetFrameTime()
 		margin: f32 = 20
         time_text_size: f32 = height*0.03
+
+        f :: proc(x: f32) -> f32 {
+            return math.sqrt(1 - math.pow(x - 1, 2))
+        }
+
+        if is_zooming() do camera.target = math.lerp(camera.target, camera.target-rl.GetMouseDelta(), f(dt*15))
+        if rl.IsKeyPressed(.D) {
+            camera.target = {0, 0}
+            camera.zoom = 1
+        }
 
         if rl.IsMusicStreamPlaying(current_music) {
             text_color = rl.GetColor(TEXT_COLOR)
@@ -162,8 +214,10 @@ main :: proc() {
             if !rl.IsMusicStreamPlaying(current_music) {
                 if music_time_percentage == 0 do rl.PlayMusicStream(current_music)
                 rl.ResumeMusicStream(current_music)
+                time.stopwatch_start(&stopwatch)
             } else {
                 rl.PauseMusicStream(current_music)
+                time.stopwatch_stop(&stopwatch)
             }
         }
 
@@ -256,7 +310,7 @@ main :: proc() {
 
         date := fmt.ctprintf("%02v/%02d/%v", day, month, year)
 		date_dimensions := rl.MeasureTextEx(font, date, time_text_size, time_text_spacing)
-		
+
 		music_image_size := width*0.25
 		music_image_dest: rl.Rectangle = {
 			x = width*0.1,
@@ -307,11 +361,14 @@ main :: proc() {
 		rl.DrawRectangleRec(music_time_line_bounds, rl.WHITE)
 
         // Timer
-        render_timer("00:00:00", timer_atlas, timer_dest, text_color)
+        // TODO: add a correct stopwatch logic
+        s_hours, s_mins, s_secs := time.clock_from_stopwatch(stopwatch)
+        timer_text := fmt.tprintf("%02d:%02d:%02d", s_hours, s_mins, s_secs)
+        render_timer(timer_text, timer_atlas, timer_dest, text_color)
 
         // tooltips must be last thing to render
         if rl.CheckCollisionPointRec(mouse, music_image_dest) {
-            show_tooltip(
+            if !is_zooming() do show_tooltip(
                 font, 
                 "* <left>&<right> to move between tracks.\n* <space> to pause/unpause the current track.\n* <up>&<down> to increase/decrease tracks sound.",
                 mouse
@@ -335,6 +392,10 @@ Num :: enum i32 {
     EIGHT,
     NINE,
     TWO_POINTS
+}
+
+is_zooming :: proc() -> bool {
+    return rl.IsMouseButtonDown(.LEFT) && rl.IsKeyDown(.LEFT_CONTROL)
 }
 
 render_timer :: proc(time_text: string, timer_atlas: rl.Texture2D, timer_dest: rl.Rectangle, color: rl.Color) {
