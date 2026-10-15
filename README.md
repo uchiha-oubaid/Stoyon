@@ -6,6 +6,7 @@
 #### Building the project
 
 ```console
-$ odin build src -out:stoyon
-$ ./stoyon
+
+$ odin build src -out:stoyon -o:speed # This will build it to your specified OS
+
 ```

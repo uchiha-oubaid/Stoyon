@@ -7,20 +7,36 @@ import "core:math"
 import "core:math/rand"
 import rl "vendor:raylib"
 
-BACKGROUND_COLOR	     :: 0x181818FF
-TOOLTIP_BACKGROUND_COLOR :: 0x242424FF
-TEXT_COLOR			     :: 0xE4E4E4FF
-PAUSED_TEXT_COLOR        :: 0xA0A0A0FF
-FONT_PATH                :: "./res/fonts/JetBrainsMonoNLNerdFont-Bold.ttf"
-FONT_BASE_SIZE           :: 128
-TIMER_ATLAS_WIDTH        :: 1890
-TIMER_ATLAS_HEIGHT       :: 340
-TIMER_CELL_WIDTH         :: TIMER_ATLAS_WIDTH/11
+BACKGROUND_COLOR			:: 0x181818FF
+TOOLTIP_BACKGROUND_COLOR	:: 0x242424FF
+TEXT_COLOR					:: 0xE4E4E4FF
+PAUSED_TEXT_COLOR			:: 0xA0A0A0FF
+FONT_PATH					:: "./res/fonts/JetBrainsMonoNLNerdFont-Bold.ttf"
+FONT_BASE_SIZE				:: 128
+TIMER_ATLAS_WIDTH			:: 1890
+TIMER_ATLAS_HEIGHT			:: 340
+TIMER_CELL_WIDTH			:: TIMER_ATLAS_WIDTH/11
+DEFAULT_CONFIG_PATH			:: "~/.config/stoyon/"
+TIMER_CHARACTER_COUNT       :: 8
+
+task_message: strings.Builder;
+is_editing_task := false;
+task_color: rl.Color = rl.GetColor(PAUSED_TEXT_COLOR);
+task_row: f32 = 0;
 
 Types :: union {
 	f32,
 	string,
 	bool
+}
+
+is_dir_here :: proc() -> bool {
+	result := run_command("mkdir", DEFAULT_CONFIG_PATH)
+	return result
+}
+
+make_config :: proc(){
+	if !is_dir_here() do run_command("mkdir", "-p", DEFAULT_CONFIG_PATH)
 }
 
 show_tooltip :: proc(font: rl.Font, message: cstring, pos: rl.Vector2) {
@@ -36,18 +52,17 @@ show_tooltip :: proc(font: rl.Font, message: cstring, pos: rl.Vector2) {
     }
 
     roundness: f32 = 0.2
-    segments: i32 = 1
+    segments : i32 = 1
     rl.DrawRectangleRounded(tooltip_rec, roundness, segments, rl.GetColor(TOOLTIP_BACKGROUND_COLOR))
-    rl.DrawRectangleRoundedLinesEx(tooltip_rec, roundness, segments, 3, rl.WHITE) // outline for the tooltip box
+    rl.DrawRectangleRoundedLinesEx(tooltip_rec, roundness, segments, 3, rl.WHITE)
     rl.DrawTextEx(font, message, margined_pos, 20, 2, rl.GetColor(TEXT_COLOR))
 }
 
-run_process :: proc(commands: ..string) -> bool {
+run_command :: proc(commands: ..string) -> bool {
     state, stdout, stderr, err := os.process_exec({command = commands}, context.allocator)
     defer delete(stderr)
     defer delete(stdout)
 
-    fmt.println(state, string(stdout), string(stderr))
     if err != nil do return false
     return true
 }
@@ -62,30 +77,39 @@ search_args :: proc(args: []string, arg: string) -> int {
 main :: proc() {
     // TODO: make the "music-dir" & "music-covers-dir" customizable
     // TODO: (2) add a mechanism of downloading covers and music with a link (Linux only for now)
+	make_config()
     music_cover_dir: cstring = "./res/covers/"
     music_covers := rl.LoadDirectoryFilesEx(music_cover_dir, "png", true)
     last_music_cover_index := u32(music_covers.count)
     current_music_cover_index := rand.uint32_range(0, u32(music_covers.count) + 1)
 
+    default_music_folder: cstring = "/home/oubaid/Music/chiptunes/"
+    music_list := rl.LoadDirectoryFiles(default_music_folder)
+    current_music_index := rand.uint32_range(0, music_list.count)
+
     // (2) -> almost
     if len(os.args) > 1 {
+		if os.args[1] == "-h" || os.args[1] == "--help" {
+			print_help()
+			return
+		}
         cover_index := search_args(os.args, "-cover")
         music_index := search_args(os.args, "-music")
         if cover_index < len(os.args) - 1 {
             output_path := fmt.tprintf("%v%v%v", music_cover_dir, last_music_cover_index+1,
                              rl.GetFileExtension(strings.clone_to_cstring(os.args[cover_index+1])))
-            run_process("aria2c", os.args[cover_index+1], "-o", output_path)
+            run_command("aria2c", os.args[cover_index+1], "-o", output_path)
 
             // convert it to png and delete the jpg because raylib does support jpgs
             // or any other image file type
             // just use png
-            // it filters them only
-            // line 66
+            // it filters them only in line 66
+
             png_output_path := fmt.tprintf("%v%v.png", music_cover_dir, rl.GetFileNameWithoutExt(strings.clone_to_cstring(output_path)))
-            run_process("magick", output_path, png_output_path)
-            run_process("rm", "-rf", output_path)
+            run_command("magick", output_path, png_output_path)
+            run_command("rm", "-rf", output_path)
         } else if music_index < len(os.args) - 1 {
-            run_process("aria2c", os.args[music_index+1])
+            run_command("aria2c", os.args[music_index+1]) // TODO: finish this
         } else {
             fmt.println("Error: invalid arguments")
         }
@@ -102,7 +126,7 @@ main :: proc() {
 	file_map := parse_config_file(file_data)
 	s_width, s_height := i32(file_map["width"].(f32)), i32(file_map["height"].(f32))
     rl.SetConfigFlags({.MSAA_4X_HINT, .WINDOW_RESIZABLE, .WINDOW_ALWAYS_RUN, .VSYNC_HINT})
-    rl.InitWindow(s_width, s_height, "Stowon")
+    rl.InitWindow(s_width, s_height, "Stoyon")
     defer rl.CloseWindow()
 	rl.InitAudioDevice()
 
@@ -145,9 +169,12 @@ main :: proc() {
     rl.UnloadImage(atlas)
     rl.SetTextureFilter(font.texture, .BILINEAR)
 
-
 	music_image := rl.LoadTexture(music_covers.paths[current_music_cover_index])
 	defer rl.UnloadTexture(music_image)
+
+	// the message
+	strings.builder_init(&task_message)
+	defer strings.builder_destroy(&task_message)
 
 	music_image_src: rl.Rectangle = {
 		x		= 0,
@@ -156,14 +183,9 @@ main :: proc() {
 		height	= f32(music_image.height)
 	}
 	
-	time_text_spacing: f32 = 5
-
-    default_music_folder: cstring = "/home/oubaid/Music/chiptunes/"
-    music_list := rl.LoadDirectoryFiles(default_music_folder)
-    current_music_index := rand.uint32_range(0, music_list.count)
-
+    time_text_spacing: f32 = 5
     curren_music_path := music_list.paths[current_music_index]
-	current_music := rl.LoadMusicStream(curren_music_path) //"./res/music/echoes_of_lumen-pixel-art-game.mp3")
+	current_music := rl.LoadMusicStream(curren_music_path)
 	defer rl.UnloadMusicStream(current_music)
 
     zoom_in_out: f32 = 0.25
@@ -191,8 +213,9 @@ main :: proc() {
         f :: proc(x: f32) -> f32 {
             return math.sqrt(1 - math.pow(x - 1, 2))
         }
+        if is_zooming() do camera.target = math.lerp(camera.target,
+            camera.target-rl.GetMouseDelta(), f(dt*15))
 
-        if is_zooming() do camera.target = math.lerp(camera.target, camera.target-rl.GetMouseDelta(), f(dt*15))
         if rl.IsKeyPressed(.D) {
             camera.target = {0, 0}
             camera.zoom = 1
@@ -210,7 +233,7 @@ main :: proc() {
 
         if rl.IsKeyPressed(.R) do rl.StopMusicStream(current_music)
 
-		if rl.IsKeyPressed(.SPACE)  {
+		if rl.IsKeyPressed(.SPACE) && !is_editing_task {
             if !rl.IsMusicStreamPlaying(current_music) {
                 if music_time_percentage == 0 do rl.PlayMusicStream(current_music)
                 rl.ResumeMusicStream(current_music)
@@ -221,18 +244,18 @@ main :: proc() {
             }
         }
 
-        if rl.IsKeyPressed(.UP) {
+        if (rl.IsKeyPressed(.UP) || rl.IsKeyPressed(.K)) && !is_editing_task {
             volume += 0.25
             if volume > max_volume do volume = max_volume
         }
 
-        if rl.IsKeyPressed(.DOWN) {
+        if (rl.IsKeyPressed(.DOWN) || rl.IsKeyPressed(.J)) && !is_editing_task {
             volume -= 0.25
             if volume < min_volume do volume = min_volume
         }
 
         // change between the tracks
-        if rl.IsKeyPressed(.LEFT) {
+        if (rl.IsKeyPressed(.LEFT) || rl.IsKeyPressed(.H)) && !is_editing_task {
             if current_music_index == 0 {
                 current_music_index = u32(music_list.count) - 1
             } else {
@@ -264,7 +287,7 @@ main :: proc() {
             if rl.IsMusicValid(current_music) && music_time_percentage > 0 do rl.PlayMusicStream(current_music)
         }
 
-        if rl.IsKeyPressed(.RIGHT) {
+        if (rl.IsKeyPressed(.RIGHT) || rl.IsKeyPressed(.L)) && !is_editing_task {
             if current_music_index == u32(music_list.count) - 1 {
                 current_music_index = 0
             } else {
@@ -328,6 +351,37 @@ main :: proc() {
             height = TIMER_ATLAS_HEIGHT*timer_scale
         }
 
+		task_width := timer_dest.width*TIMER_CHARACTER_COUNT*0.5
+		task_bounds: rl.Rectangle = {
+			x = timer_dest.x + (timer_dest.width*TIMER_CHARACTER_COUNT - task_width)*0.5,
+			y = timer_dest.y + timer_dest.height + margin,
+			width = task_width,
+			height = timer_dest.height*0.75
+		}
+
+		if rl.CheckCollisionPointRec(mouse, task_bounds) {
+			if rl.IsMouseButtonDown(.LEFT) {
+				is_editing_task = true
+				task_color = rl.GetColor(TEXT_COLOR)
+			}
+		} else {
+			if rl.IsMouseButtonDown(.LEFT) {
+				is_editing_task = false
+				task_color = rl.GetColor(PAUSED_TEXT_COLOR)
+			}
+		}
+
+		is_typable :: proc(char: rune) -> bool {
+			return u32(char) >= 32 && u32(char) <= 125;
+		}
+
+		if is_editing_task {
+			char := rl.GetCharPressed()
+			if u32(char) > 0 {
+				if u32(char) > 0 do strings.write_rune(&task_message, char);
+			}
+		}
+
         rl.BeginDrawing()
         rl.BeginMode2D(camera)
         rl.ClearBackground(rl.GetColor(BACKGROUND_COLOR))
@@ -359,6 +413,13 @@ main :: proc() {
 		}
 		
 		rl.DrawRectangleRec(music_time_line_bounds, rl.WHITE)
+		// rl.DrawRectangleLinesEx(task_bounds, 2, task_color)
+
+		rl.DrawTextEx(font, strings.to_cstring(&task_message),
+					  {task_bounds.x + margin*0.5, (task_bounds.y + margin*0.5) + task_bounds.height*task_row},
+					  50,
+					  2,
+					  text_color)
 
         // Timer
         // TODO: add a correct stopwatch logic
@@ -427,4 +488,11 @@ render_number :: proc(texture: rl.Texture2D, num: Num, dest: rl.Rectangle, color
     }
 
     rl.DrawTexturePro(texture, src_result, dest, {0, 0}, 0, color)
+}
+
+print_help :: proc() {
+	fmt.println("Usage: stoyon [OPTIONAL_FLAGS..]")
+	fmt.println("\"-h || --help\": Prints this message")
+	fmt.println("\"-cover [LINKS..]\": Downloads a list of covers to the used directory by stoyon")
+	fmt.println("\"-music [LINKS..]\": Downloads a list of music to the used directory by stoyon")
 }
