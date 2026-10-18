@@ -1,6 +1,7 @@
 package stoyon
 import "core:fmt"
 import "core:os"
+import "core:log"
 import "core:time"
 import "core:strings"
 import "core:math"
@@ -23,6 +24,7 @@ task_message: strings.Builder;
 is_editing_task := false;
 task_color: rl.Color = rl.GetColor(PAUSED_TEXT_COLOR);
 task_row: f32 = 0;
+cursor_col, cursor_row: f32 = 0, 0;
 
 Types :: union {
 	f32,
@@ -81,7 +83,7 @@ main :: proc() {
     music_cover_dir: cstring = "./res/covers/"
     music_covers := rl.LoadDirectoryFilesEx(music_cover_dir, "png", true)
     last_music_cover_index := u32(music_covers.count)
-    current_music_cover_index := rand.uint32_range(0, u32(music_covers.count) + 1)
+    current_music_cover_index := rand.uint32_range(0, u32(music_covers.count))
 
     default_music_folder: cstring = "/home/oubaid/Music/chiptunes/"
     music_list := rl.LoadDirectoryFiles(default_music_folder)
@@ -128,6 +130,7 @@ main :: proc() {
     rl.SetConfigFlags({.MSAA_4X_HINT, .WINDOW_RESIZABLE, .WINDOW_ALWAYS_RUN, .VSYNC_HINT})
     rl.InitWindow(s_width, s_height, "Stoyon")
     defer rl.CloseWindow()
+	rl.SetExitKey(.KEY_NULL)
 	rl.InitAudioDevice()
 
     camera: rl.Camera2D
@@ -231,7 +234,7 @@ main :: proc() {
         rl.SetMusicVolume(current_music, volume)
         music_time_percentage: f32 = rl.GetMusicTimePlayed(current_music) / rl.GetMusicTimeLength(current_music)
 
-        if rl.IsKeyPressed(.R) do rl.StopMusicStream(current_music)
+        if rl.IsKeyPressed(.R) && !is_editing_task do rl.StopMusicStream(current_music)
 
 		if rl.IsKeyPressed(.SPACE) && !is_editing_task {
             if !rl.IsMusicStreamPlaying(current_music) {
@@ -359,12 +362,13 @@ main :: proc() {
 			height = timer_dest.height*0.75
 		}
 
-		if rl.CheckCollisionPointRec(mouse, task_bounds) {
-			if rl.IsMouseButtonDown(.LEFT) {
-				is_editing_task = true
-				task_color = rl.GetColor(TEXT_COLOR)
-			}
-		} else {
+
+		if rl.IsKeyPressed(.I) && !is_editing_task {
+			is_editing_task = true
+			task_color = rl.GetColor(TEXT_COLOR)
+		}
+
+		if !rl.CheckCollisionPointRec(mouse, task_bounds) {
 			if rl.IsMouseButtonDown(.LEFT) {
 				is_editing_task = false
 				task_color = rl.GetColor(PAUSED_TEXT_COLOR)
@@ -375,10 +379,40 @@ main :: proc() {
 			return u32(char) >= 32 && u32(char) <= 125;
 		}
 
+		cursor_width  := task_bounds.width*0.05
+		cursor_height := task_bounds.height*0.25
+		cursor_bounds: rl.Rectangle = {
+			x = (task_bounds.x + margin*0.5) + cursor_col*cursor_width,
+			y = (task_bounds.y + margin*0.5) + cursor_row*cursor_height,
+			width = cursor_width,
+			height = cursor_height
+		}
+
+		// TODO: Add a cursor
 		if is_editing_task {
-			char := rl.GetCharPressed()
-			if u32(char) > 0 {
-				if u32(char) > 0 do strings.write_rune(&task_message, char);
+			char := rl.GetCharPressed();
+			key := rl.GetKeyPressed();
+
+			if rl.IsKeyPressed(.ESCAPE) {
+				is_editing_task = false
+				task_color = rl.GetColor(PAUSED_TEXT_COLOR)
+			}
+			
+			if u32(char) > 0 || key != .KEY_NULL {
+				if u32(char) >= 32 && u32(char) <= 125 {
+					cursor_col += 1
+					strings.write_rune(&task_message, char);
+				}
+
+				if key == .BACKSPACE {
+					if cursor_col > 0 do cursor_col -= 1
+					strings.pop_rune(&task_message);
+				} else if key == .ENTER {
+					cursor_row += 1
+					cursor_col = 0
+					strings.write_rune(&task_message, '\n');
+					strings.write_rune(&task_message, '\t');
+				}
 			}
 		}
 
@@ -413,13 +447,15 @@ main :: proc() {
 		}
 		
 		rl.DrawRectangleRec(music_time_line_bounds, rl.WHITE)
-		// rl.DrawRectangleLinesEx(task_bounds, 2, task_color)
+		// if is_editing_task do rl.DrawRectangleLinesEx(task_bounds, 2, task_color)
 
 		rl.DrawTextEx(font, strings.to_cstring(&task_message),
 					  {task_bounds.x + margin*0.5, (task_bounds.y + margin*0.5) + task_bounds.height*task_row},
-					  50,
+					  task_bounds.height*0.25,
 					  2,
-					  text_color)
+					  task_color)
+
+		if is_editing_task do rl.DrawRectangleRec(cursor_bounds, task_color);
 
         // Timer
         // TODO: add a correct stopwatch logic
@@ -438,6 +474,11 @@ main :: proc() {
 
         rl.EndMode2D()
 		rl.EndDrawing()
+
+		if rl.IsKeyPressed(.A) && !is_editing_task {
+			log.infof("Window Closed.\n");
+			os.exit(0);
+		}
     }
 }
 
